@@ -182,15 +182,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
-            override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
-            override fun onIceConnectionReceivingChange(p0: Boolean) {}
-            override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
-            override fun onAddStream(p0: MediaStream?) {}
-            override fun onRemoveStream(p0: MediaStream?) {}
-            override fun onDataChannel(p0: DataChannel?) {}
-            override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
+            override fun onSignalingChange(newState: PeerConnection.SignalingState?) { Log.d(TAG, "onSignalingChange: $newState") }
+            override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) { Log.d(TAG, "onIceConnectionChange: $newState") }
+            override fun onIceConnectionReceivingChange(receiving: Boolean) { Log.d(TAG, "onIceConnectionReceivingChange: $receiving") }
+            override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState?) { Log.d(TAG, "onIceGatheringChange: $newState") }
+            override fun onAddStream(stream: MediaStream?) { Log.d(TAG, "onAddStream") }
+            override fun onRemoveStream(stream: MediaStream?) { Log.d(TAG, "onRemoveStream") }
+            override fun onDataChannel(dataChannel: DataChannel?) { Log.d(TAG, "onDataChannel") }
+            override fun onRenegotiationNeeded() { Log.d(TAG, "onRenegotiationNeeded") }
+            override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) { Log.d(TAG, "onAddTrack") }
+            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) { Log.d(TAG, "onIceCandidatesRemoved") }
 
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
@@ -204,6 +205,7 @@ class MainActivity : AppCompatActivity() {
                         })
                     }
                     webSocket?.send(candidateMsg.toString())
+                    Log.d(TAG, "Sent ICE candidate")
                 }
             }
         })
@@ -221,12 +223,20 @@ class MainActivity : AppCompatActivity() {
         when (json.getString("type")) {
             "offer" -> {
                 Log.d(TAG, "Received offer")
-                val offerSdp = json.getJSONObject("payload").getString("sdp")
+                val payload = json.getJSONObject("payload")
+                val offerSdp = payload.getString("sdp")
                 peerConnection?.setRemoteDescription(
-                    SimpleSdpObserver(),
+                    object : SdpObserver {
+                        override fun onCreateSuccess(p0: SessionDescription?) {}
+                        override fun onSetSuccess() {
+                            Log.d(TAG, "Remote description set successfully")
+                            createAnswer()
+                        }
+                        override fun onCreateFailure(p0: String?) {}
+                        override fun onSetFailure(p0: String?) { Log.e(TAG, "Failed to set remote description: $p0") }
+                    },
                     SessionDescription(SessionDescription.Type.OFFER, offerSdp)
                 )
-                createAnswer()
             }
             "candidate" -> {
                 Log.d(TAG, "Received ICE candidate")
@@ -242,23 +252,35 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createAnswer() {
-        peerConnection?.createAnswer(object : SimpleSdpObserver() {
+        peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(sessionDescription: SessionDescription) {
+                Log.d(TAG, "Answer created successfully")
                 var sdp = sessionDescription.sdp
                 sdp = preferH264(sdp) // Force H.264
                 val answer = SessionDescription(sessionDescription.type, sdp)
-                peerConnection?.setLocalDescription(SimpleSdpObserver(), answer)
-
-                val answerMsg = JSONObject().apply {
-                    put("type", "answer")
-                    put("room", binding.roomIdInput.text.toString())
-                    put("payload", JSONObject().apply {
-                        put("type", "answer")
-                        put("sdp", sdp)
-                    })
-                }
-                webSocket?.send(answerMsg.toString())
+                peerConnection?.setLocalDescription(object : SdpObserver {
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onSetSuccess() {
+                        Log.d(TAG, "Local description set successfully")
+                        // After setting local description, send the answer to the peer
+                        val answerMsg = JSONObject().apply {
+                            put("type", "answer")
+                            put("room", binding.roomIdInput.text.toString())
+                            put("payload", JSONObject().apply {
+                                put("type", "answer")
+                                put("sdp", answer.sdp)
+                            })
+                        }
+                        webSocket?.send(answerMsg.toString())
+                        Log.d(TAG, "Sent answer")
+                    }
+                    override fun onCreateFailure(p0: String?) {}
+                    override fun onSetFailure(p0: String?) { Log.e(TAG, "Failed to set local description: $p0") }
+                }, answer)
             }
+            override fun onCreateFailure(p0: String?) { Log.e(TAG, "Failed to create answer: $p0") }
+            override fun onSetSuccess() {}
+            override fun onSetFailure(p0: String?) {}
         }, MediaConstraints())
     }
 
@@ -272,7 +294,10 @@ class MainActivity : AppCompatActivity() {
                 break
             }
         }
-        if (mLineIndex == -1) return sdp
+        if (mLineIndex == -1) {
+            Log.d(TAG, "No m=video line found in SDP")
+            return sdp
+        }
 
         // Find H264 payload type
         var h264PayloadType = ""
@@ -284,14 +309,28 @@ class MainActivity : AppCompatActivity() {
                 break
             }
         }
-        if (h264PayloadType.isEmpty()) return sdp
+        if (h264PayloadType.isEmpty()) {
+            Log.d(TAG, "No H264 payload type found in SDP")
+            return sdp
+        }
+
+        Log.d(TAG, "Found H264 payload type: $h264PayloadType")
 
         // Reorder codecs
         val mLineParts = lines[mLineIndex].split(" ").toMutableList()
-        val otherPayloads = mLineParts.subList(3, mLineParts.size).filter { it != h264PayloadType }
-        mLineParts.subList(3, mLineParts.size).clear()
-        mLineParts.add(h264PayloadType)
-        mLineParts.addAll(otherPayloads)
+        // m=video 9 UDP/TLS/RTP/SAVPF 100 101 102 96
+        if (mLineParts.size <= 3) return sdp // Not enough parts to reorder
+
+        val codecPayloads = mLineParts.subList(3, mLineParts.size)
+        if (!codecPayloads.contains(h264PayloadType)) {
+            Log.d(TAG, "H264 payload type not in m-line, cannot reorder.")
+            return sdp
+        }
+
+        codecPayloads.removeAll { it == h264PayloadType }
+        codecPayloads.add(0, h264PayloadType)
+
+        Log.d(TAG, "Reordered codecs: $codecPayloads")
 
         lines[mLineIndex] = mLineParts.joinToString(" ")
         return lines.joinToString("\r\n")
@@ -324,13 +363,5 @@ class MainActivity : AppCompatActivity() {
         peerConnectionFactory.dispose()
         eglBase.release()
         coroutineScope.cancel()
-    }
-
-    // Dummy SdpObserver for simplicity
-    open class SimpleSdpObserver : SdpObserver {
-        override fun onCreateSuccess(p0: SessionDescription?) {}
-        override fun onSetSuccess() {}
-        override fun onCreateFailure(p0: String?) {}
-        override fun onSetFailure(p0: String?) {}
     }
 }
