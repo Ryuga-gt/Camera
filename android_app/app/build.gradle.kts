@@ -41,8 +41,8 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
 
-    // WebRTC
-    implementation("org.webrtc:google-webrtc:1.0.32006")
+    // WebRTC (using a community-maintained version as the official one is outdated)
+    implementation("com.infobip:google-webrtc:1.0.45036")
 
     // CameraX for camera access
     val cameraxVersion = "1.3.1"
