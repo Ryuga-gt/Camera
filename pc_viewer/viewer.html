@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhoneCam PC Viewer</title>
+    <style>
+        body { font-family: sans-serif; background-color: #222; color: #eee; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        #controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+        input { padding: 8px; font-size: 16px; }
+        button { padding: 8px 16px; font-size: 16px; cursor: pointer; }
+        #video-container {
+            width: 100%;
+            background-color: #000;
+            border: 1px solid #444;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        #log {
+            margin-top: 20px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            background-color: #333;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>PhoneCam PC Viewer</h1>
+        <div id="controls">
+            <input type="text" id="server-url" value="ws://localhost:8765">
+            <input type="text" id="room-id" placeholder="Enter Room ID">
+            <button id="connect-btn">Connect</button>
+        </div>
+        <div id="video-container">
+            <video id="remote-video" autoplay playsinline></video>
+        </div>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        const serverUrlInput = document.getElementById('server-url');
+        const roomIdInput = document.getElementById('room-id');
+        const connectBtn = document.getElementById('connect-btn');
+        const videoElement = document.getElementById('remote-video');
+        const logElement = document.getElementById('log');
+
+        let ws = null;
+        let pc = null;
+        const ROOM_ID = () => roomIdInput.value.trim();
+
+        function log(message) {
+            console.log(message);
+            logElement.textContent += `> ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        connectBtn.onclick = async () => {
+            if (ws || pc) {
+                log("Already connected. Please refresh to start over.");
+                return;
+            }
+            if (!ROOM_ID()) {
+                alert("Please enter a Room ID.");
+                return;
+            }
+
+            log("Connecting to signaling server...");
+            ws = new WebSocket(serverUrlInput.value);
+
+            ws.onopen = () => {
+                log("WebSocket connection established.");
+                const joinMsg = { type: "join", room: ROOM_ID() };
+                ws.send(JSON.stringify(joinMsg));
+                log(`Sent join message for room: ${ROOM_ID()}`);
+
+                // Once joined, create the peer connection and the offer
+                createPeerConnection();
+                createOffer();
+            };
+
+            ws.onmessage = async (event) => {
+                const message = JSON.parse(event.data);
+                log(`Received message: ${message.type}`);
+
+                if (message.type === 'answer') {
+                    log("Received answer. Setting remote description.");
+                    try {
+                        await pc.setRemoteDescription(new RTCSessionDescription(message.payload));
+                    } catch (e) {
+                        log(`Error setting remote description: ${e}`);
+                    }
+                } else if (message.type === 'candidate') {
+                    log("Received ICE candidate. Adding to peer connection.");
+                    try {
+                        await pc.addIceCandidate(new RTCIceCandidate(message.payload));
+                    } catch (e) {
+                        log(`Error adding received ICE candidate: ${e}`);
+                    }
+                } else if (message.type === 'peer_joined') {
+                    log(`Another peer joined the room: ${message.peer}`);
+                } else if (message.type === 'peer_left') {
+                    log(`A peer left the room: ${message.peer}`);
+                }
+            };
+
+            ws.onerror = (error) => {
+                log(`WebSocket error: ${error}`);
+            };
+
+            ws.onclose = () => {
+                log("WebSocket connection closed.");
+                if (pc) {
+                    pc.close();
+                    pc = null;
+                }
+                ws = null;
+            };
+        };
+
+        function createPeerConnection() {
+            log("Creating PeerConnection...");
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            };
+            pc = new RTCPeerConnection(configuration);
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log("Generated ICE candidate. Sending to peer.");
+                    const candidateMsg = {
+                        room: ROOM_ID(),
+                        type: 'candidate',
+                        payload: event.candidate,
+                    };
+                    ws.send(JSON.stringify(candidateMsg));
+                }
+            };
+
+            pc.ontrack = (event) => {
+                log("Received remote video track!");
+                if (videoElement.srcObject !== event.streams[0]) {
+                    videoElement.srcObject = event.streams[0];
+                    log("Attached remote stream to video element.");
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                log(`PeerConnection state: ${pc.connectionState}`);
+            };
+        }
+
+        async function createOffer() {
+            if (!pc) {
+                log("PeerConnection not initialized.");
+                return;
+            }
+            log("Creating offer...");
+            try {
+                // This peer only receives video, so no tracks are added.
+                // The offer will reflect that we want to receive video.
+                const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: false });
+                await pc.setLocalDescription(offer);
+
+                log("Offer created and set as local description. Sending to peer.");
+                const offerMsg = {
+                    room: ROOM_ID(),
+                    type: 'offer',
+                    payload: pc.localDescription,
+                };
+                ws.send(JSON.stringify(offerMsg));
+            } catch (e) {
+                log(`Error creating offer: ${e}`);
+            }
+        }
+
+    </script>
+</body>
+</html>
