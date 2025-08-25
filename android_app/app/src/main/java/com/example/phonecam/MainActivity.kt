@@ -255,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(sessionDescription: SessionDescription) {
                 Log.d(TAG, "Answer created successfully")
-                var sdp = sessionDescription.sdp
+                var sdp = sessionDescription.description
                 sdp = preferH264(sdp) // Force H.264
                 val answer = SessionDescription(sessionDescription.type, sdp)
                 peerConnection?.setLocalDescription(object : SdpObserver {
@@ -268,7 +268,7 @@ class MainActivity : AppCompatActivity() {
                             put("room", binding.roomIdInput.text.toString())
                             put("payload", JSONObject().apply {
                                 put("type", "answer")
-                                put("sdp", answer.sdp)
+                                put("sdp", answer.description)
                             })
                         }
                         webSocket?.send(answerMsg.toString())
