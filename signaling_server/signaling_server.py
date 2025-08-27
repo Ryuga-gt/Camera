@@ -41,7 +41,7 @@ async def handler(websocket):
             # so we do it manually.
             peers_in_room = [peer for peer in ROOMS[room_id] if peer != websocket]
             if peers_in_room:
-                await asyncio.wait([peer.send(json.dumps(join_notification)) for peer in peers_in_room])
+                await asyncio.gather(*[peer.send(json.dumps(join_notification)) for peer in peers_in_room])
 
         else:
             await websocket.send(json.dumps({"error": "First message must be of type 'join'"}))
@@ -53,7 +53,7 @@ async def handler(websocket):
             # Broadcast the message to all other clients in the same room
             peers_in_room = [peer for peer in ROOMS[room_id] if peer != websocket]
             if peers_in_room:
-                await asyncio.wait([peer.send(message) for peer in peers_in_room])
+                await asyncio.gather(*[peer.send(message) for peer in peers_in_room])
 
     except websockets.exceptions.ConnectionClosed as e:
         logging.info(f"Client {websocket.remote_address} disconnected. Reason: {e.code} {e.reason}")
@@ -76,7 +76,7 @@ async def handler(websocket):
                     "type": "peer_left",
                     "peer": str(websocket.remote_address)
                 }
-                await asyncio.wait([peer.send(json.dumps(leave_notification)) for peer in ROOMS[room_id]])
+                await asyncio.gather(*[peer.send(json.dumps(leave_notification)) for peer in ROOMS[room_id]])
 
 
 async def main():
