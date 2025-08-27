@@ -80,11 +80,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun initializeWebRTC() {
         // 1. Initialize PeerConnectionFactory
-        val options = PeerConnectionFactory.InitializationOptions.builder(this)
-            .setEnableInternalTracer(true)
-            .setFieldTrials("WebRTC-H264HighProfile/Enabled/")
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
+        PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(this).createInitializationOptions())
 
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
