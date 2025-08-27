@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO)
 # In-memory storage for rooms and their participants
 ROOMS = {}
 
-async def handler(websocket, path):
+async def handler(websocket):
     """
     Handle WebSocket connections, manage rooms, and relay messages.
     """
